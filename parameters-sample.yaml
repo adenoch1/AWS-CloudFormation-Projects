@@ -92,7 +92,7 @@ Resources:
       SubnetId: !Select [0, !Ref SubnetIdsParam]
       SecurityGroupIds:
         - !Ref AppSecurityGroup
-      #IamInstanceProfile: !Ref EC2InstanceProfileParam
+      IamInstanceProfile: !Ref EC2InstanceProfileParam
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
@@ -102,6 +102,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash -xe
           yum install -y aws-cli
+          mkdir -p /etc/myapp
           aws ssm get-parameter --name "${AppConfigParam}" --query 'Parameter.Value' --output text > /etc/myapp/config.json
 
   # S3 Bucket with parameterized unique name
