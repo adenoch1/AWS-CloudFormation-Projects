@@ -1,0 +1,10 @@
+Resources:
+  MyInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-05ffe3c48a9991133
+      InstanceType: t2.micro
+      SubnetId: subnet-0bf168702e63ec072         # default subnet id
+      AvailabilityZone: us-east-1a               # optional (CF will infer from your SubnetId if omitted)
+      SecurityGroupIds:
+        - sg-0f8df4cd20fe7f372                   # default security group

@@ -1,0 +1,30 @@
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: “The VPC for your EC2 subnet & security groups”
+
+Resources:
+  ServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP + restricted SSH
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 172.31.2.0/24
+
+  MyInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-05ffe3c48a9991133
+      InstanceType: t2.micro
+      SubnetId: subnet-01540e03162d56242
+      AvailabilityZone: us-east-1b
+      SecurityGroupIds:
+        - !Ref ServerSecurityGroup

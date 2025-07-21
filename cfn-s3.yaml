@@ -1,0 +1,15 @@
+# "Resources":
+#    "HelloBucket": 
+#       "Type": "AWS::S3::Bucket",
+#       "Properties":
+#         "LifecycleConfiguration":
+#           "Rules":
+#             "ExpirationInDays": 3,
+#             "Status": "Enabled
+
+
+Resources:
+  MyS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: cfn-bucket-adenoch-123987

@@ -1,0 +1,29 @@
+Resources:
+  MyVpcDemo:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+  MyPubSubDemo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVpcDemo
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: us-east-1a
+  MyIgw:
+    Type: AWS::EC2::InternetGateway
+    Properties: {}
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVpcDemo
+      InternetGatewayId: !Ref MyIgw
+  MyServerDemo:
+    Type: AWS::EC2::Instance
+    Properties:
+       ImageId: ami-0150ccaf51ab55a51
+       KeyName: my-keypair
+       InstanceType: t2.micro
+       SubnetId: !Ref MyPubSubDemo
+

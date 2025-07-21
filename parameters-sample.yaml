@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: |
+  Example CloudFormation template demonstrating various Parameter types and constraints,
+  including automatic AMI lookup via SSM Parameter for Amazon Linux 2, KeyName, and proper VPC/bucket handling.
+
+# Mappings for environment-specific settings
+Mappings:
+  EnvSettings:
+    dev:
+      InstanceType: t2.micro
+      SSHLocation: 203.0.113.0/24
+    test:
+      InstanceType: t2.small
+      SSHLocation: 198.51.100.0/24
+    prod:
+      InstanceType: t3.small
+      SSHLocation: 198.51.100.0/24
+
+Parameters:
+  # 1. EC2 Key Pair Name for SSH
+  KeyNameParam:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+
+  # 2. VPC ID for the Security Group
+  VpcIdParam:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC in which to create the security group
+
+  # 3. AMI ID via SSM Parameter Store (Amazon Linux 2)
+  ImageIdParam:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: SSM parameter for the latest Amazon Linux 2 AMI ID
+
+  # 4. Environment type for mapping key
+  EnvTypeParam:
+    Type: String
+    Description: Deployment environment indicator
+    AllowedValues:
+      - dev
+      - test
+      - prod
+    Default: dev
+    ConstraintDescription: Must be one of dev, test, or prod.
+
+  # 5. SSM Parameter usage for application config
+  AppConfigParam:
+    Type: AWS::SSM::Parameter::Value<String>
+    Description: SSM parameter storing application config JSON path
+    Default: /myapp/config
+
+  # 6. List of Subnet IDs for EC2
+  SubnetIdsParam:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnet IDs where instances will be launched
+
+  # 7. S3 Bucket name prefix with regex AllowedPattern
+  BucketNamePrefixParam:
+    Type: String
+    Description: Prefix for the S3 bucket name (lowercase, numbers, hyphens)
+    Default: my-app-bucket
+    AllowedPattern: '^[a-z0-9\-]+$'
+    ConstraintDescription: Lowercase letters, numbers, and hyphens only.
+
+  # 8. IAM Instance Profile
+  EC2InstanceProfileParam:
+    Type: String
+    Description: The name of the IAM Instance Profile for EC2 (with ssm:GetParameter)
+    Default: EC2-SSM-GetParam-Role
+
+Resources:
+  # Security Group for EC2 access
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH and app traffic
+      VpcId: !Ref VpcIdParam
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !FindInMap [EnvSettings, !Ref EnvTypeParam, SSHLocation]
+
+  # EC2 Instance using parameters and mappings
+  AppServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ImageIdParam
+      InstanceType: !FindInMap [EnvSettings, !Ref EnvTypeParam, InstanceType]
+      KeyName: !Ref KeyNameParam
+      SubnetId: !Select [0, !Ref SubnetIdsParam]
+      SecurityGroupIds:
+        - !Ref AppSecurityGroup
+      #IamInstanceProfile: !Ref EC2InstanceProfileParam
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+      # Example of pulling config from SSM
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          yum install -y aws-cli
+          aws ssm get-parameter --name "${AppConfigParam}" --query 'Parameter.Value' --output text > /etc/myapp/config.json
+
+  # S3 Bucket with parameterized unique name
+  AppBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${BucketNamePrefixParam}-${AWS::AccountId}-${AWS::Region}"
+
+Outputs:
+  InstanceId:
+    Description: The Instance ID of the application server
+    Value: !Ref AppServerInstance
+  BucketName:
+    Description: Name of the S3 bucket
+    Value: !Ref AppBucket

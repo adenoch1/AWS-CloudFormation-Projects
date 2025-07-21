@@ -1,0 +1,11 @@
+# AWS credentials
+*.pem
+.aws/
+
+# IDE
+.vscode/
+
+# OS files
+.DS_Store
+
+*.zip
