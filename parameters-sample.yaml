@@ -118,3 +118,6 @@ Outputs:
   BucketName:
     Description: Name of the S3 bucket
     Value: !Ref AppBucket
+  RegionOutput:
+    Description: AWS Region in which stack is deployed
+    Value: !Ref AWS::Region
