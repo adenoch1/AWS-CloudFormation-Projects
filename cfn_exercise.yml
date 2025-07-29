@@ -1,0 +1,266 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Example multi‑resource stack with Parameters, Mappings, Rules, Conditions, 
+  Metadata (template‑ and resource‑level), Outputs, and three special metadata namespaces.
+
+##########################
+# 1. Parameters
+##########################
+Parameters:
+  EnvType:
+    Type: String
+    Description: Deployment environment
+    AllowedValues: [ dev, test, prod ]
+    Default: dev
+  InstanceType:
+    Type: String
+    Description: EC2 instance type
+    AllowedValues: [ t3.micro, t3.small, t3.medium ]
+    Default: t3.micro
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: SSH key for EC2 access
+  VpcCIDR:
+    Type: String
+    Description: CIDR block for the VPC
+    Default: 10.0.0.0/16
+  PublicSubnetCIDR:
+    Type: String
+    Description: CIDR block for the public subnet
+    Default: 10.0.1.0/24
+  PrivateSubnetCIDR:
+    Type: String
+    Description: CIDR block for the private subnet
+    Default: 10.0.2.0/24
+  EnableS3Versioning:
+    Type: String
+    Description: Enable versioning on S3 bucket?
+    AllowedValues: [ "true", "false" ]
+    Default: "true"
+
+##########################
+# 2. Mappings
+##########################
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-0abcdef1234567890
+    us-west-2:
+      AMI: ami-0123456789abcdef0
+
+##########################
+# 3. Rules (cross-parameter validation)
+##########################
+Rules:
+  ValidateDistinctSubnets:
+    Description: Ensure public and private subnets do not overlap
+    RuleCondition: !Not [ !Equals [ !Ref VpcCIDR, "" ] ]
+    Assertions:
+      - Assert:
+          !Not 
+            - !Contains 
+              - !Ref PublicSubnetCIDR
+              - !Ref PrivateSubnetCIDR
+        AssertDescription: PublicSubnetCIDR must not overlap with PrivateSubnetCIDR
+
+##########################
+# 4. Conditions
+##########################
+Conditions:
+  IsProduction: !Equals [ !Ref EnvType, prod ]
+  UseVersioning: !Equals [ !Ref EnableS3Versioning, "true" ]
+
+##########################
+# 5. Template‑level Metadata
+##########################
+Metadata:
+  Author: "Your Name"
+  Project: "FullExampleStack"
+  LastUpdated: "2025‑07‑29"
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: "Network Configuration" }
+        Parameters: [ VpcCIDR, PublicSubnetCIDR, PrivateSubnetCIDR ]
+      - Label: { default: "Compute Settings" }
+        Parameters: [ InstanceType, KeyName ]
+      - Label: { default: "Miscellaneous" }
+        Parameters: [ EnvType, EnableS3Versioning ]
+    ParameterLabels:
+      EnvType: { default: "Environment Type" }
+      EnableS3Versioning: { default: "S3 Bucket Versioning" }
+
+##########################
+# 6. Resources
+##########################
+Resources:
+
+  ## 6.1 IAM Role for EC2 (to allow SSM, CloudFormation Init, etc)
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [ ec2.amazonaws.com ] }
+            Action: [ sts:AssumeRole ]
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [ !Ref EC2InstanceRole ]
+      Path: "/"
+
+  ## 6.2 VPC and Subnets
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-VPC"
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !Ref PublicSubnetCIDR
+      MapPublicIpOnLaunch: true
+    Metadata:
+      Notes: "Public subnet for internet‑facing resources"
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !Ref PrivateSubnetCIDR
+    Metadata:
+      Notes: "Private subnet for backend resources"
+
+  ## 6.3 Internet Gateway and Route Table
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachIGW:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIGW
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  ## 6.4 S3 Bucket
+  MyBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-bucket"
+      VersioningConfiguration:
+        Status: !If [ UseVersioning, Enabled, Suspended ]
+    Metadata:
+      AWS::CloudFormation::Authentication:
+        S3Creds:
+          type: "s3"
+          roleName: !Ref EC2InstanceRole
+          buckets: [ !Ref MyBucket ]
+
+  ## 6.5 EC2 Instance with cfn-init
+  WebServer:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          default:
+            - install
+            - configure
+            - start
+        install:
+          packages:
+            yum:
+              httpd: []
+        configure:
+          files:
+            "/var/www/html/index.html":
+              content: !Sub |
+                <h1>Welcome to ${AWS::StackName} in ${EnvType}</h1>
+              mode: "000644"
+        start:
+          services:
+            sysvinit:
+              httpd:
+                enabled: true
+                ensureRunning: true
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !FindInMap [ RegionMap, !Ref "AWS::Region", AMI ]
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref PublicSubnet
+          GroupSet: [ !Ref WebSecurityGroup ]
+      IamInstanceProfile: !Ref EC2InstanceProfile
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP and SSH
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+##########################
+# 7. Outputs
+##########################
+Outputs:
+  VpcId:
+    Description: "VPC ID"
+    Value: !Ref MyVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcId"
+
+  PublicSubnetId:
+    Description: "Public Subnet ID"
+    Value: !Ref PublicSubnet
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnetId"
+
+  BucketName:
+    Description: "S3 Bucket Name"
+    Condition: UseVersioning
+    Value: !Ref MyBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketName"
+
+  WebServerPublicIP:
+    Description: "Public IP of the web server"
+    Value: !GetAtt WebServer.PublicIp
