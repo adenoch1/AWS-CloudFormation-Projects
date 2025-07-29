@@ -1,0 +1,37 @@
+Conditions:
+  CreateProdResources: !Equals [ !Ref EnvType, prod ]
+  IsUSEast1:        !Equals [ !Ref "AWS::Region", us-east-1 ]
+  UseEncryptedS3:   !Equals [ !Ref EnableEncryption, "true" ]
+  ShouldCreateDB:   !And 
+    - !Condition CreateProdResources
+    - !Condition UseEncryptedS3
+
+# Only create a bastion host in non‑prod environments
+Resources:
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Condition: CreateProdResources
+    Properties:
+      # …
+
+
+  AppServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !If
+        - IsUSEast1
+        - ami-0abcdef1234567890    # US East
+        - ami-098765fedcba01234    # Other regions
+      InstanceType: t3.micro
+
+
+# Export an encrypted bucket name only if encryption is enabled
+
+Outputs:
+  EncryptedBucketName:
+    Condition: UseEncryptedS3
+    Description: "The name of the encrypted S3 bucket"
+    Value: !Ref SecureBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-EncryptedBucket"
+

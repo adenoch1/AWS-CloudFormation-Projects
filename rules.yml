@@ -1,0 +1,18 @@
+Parameters:
+  VpcId:
+    Type: String
+    Description: VPC in which to deploy resources
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets (must all be in the same VPC)
+
+Rules:
+  SubnetsInSameVpc:
+    Description: "Ensure all SubnetIds belong to the selected VPC"
+    RuleCondition: !Not [ !Equals [ !Ref VpcId, "" ] ]  # only validate when VpcId is set
+    Assertions:
+      - Assert:
+          !EachMemberIn
+            - !Ref SubnetIds
+            - !GetAtt [ NetworkMapping, !Ref VpcId ]        # assume Mapping of VPC->Subnet list
+        AssertDescription: "Each SubnetId must belong to the selected VPC"

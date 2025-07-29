@@ -1,4 +1,4 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: 2010-09-09
 Description: |
   Example CloudFormation template demonstrating various Parameter types and constraints,
   including automatic AMI lookup via SSM Parameter for Amazon Linux 2, KeyName, and proper VPC/bucket handling.

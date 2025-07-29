@@ -1,0 +1,20 @@
+Outputs:
+  VpcId:
+    Description: "The ID of the VPC"
+    Value: !Ref MyVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcId"
+  SubnetIds:
+    Description: "Comma-separated list of private subnet IDs"
+    Value: !Join [ ",", [ !Ref PrivateSubnet1, !Ref PrivateSubnet2 ] ]
+    Export:
+      Name: !Sub "${AWS::StackName}-SubnetIds"
+
+# Another stack can reference it using an ImportValue function like the below
+
+Resources:
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !ImportValue "NetworkStack-VpcId"
+
