@@ -1,0 +1,248 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Demo template combining Metadata, Parameters, Mappings, Conditions, Rules,
+  Resources, and Outputs for a simple VPC + EC2 + S3 stack.
+
+# ───────────────
+# 1. TEMPLATE‑LEVEL METADATA
+# ───────────────
+Metadata:
+  Author: "Enoch Adekanye"
+  Project: "CFN Full‑Example Demo"
+  LastUpdated: "2025-07-29"
+  # Controls Console layout of parameters
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: "Environment Settings" }
+        Parameters: [ EnvType, KeyName, EnableEncryption ]
+      - Label: { default: "Network Configuration" }
+        Parameters: [ VpcCidr, SubnetCidr ]
+    ParameterLabels:
+      EnvType:          { default: "Deployment Environment" }
+      EnableEncryption: { default: "Enable S3 Encryption?" }
+
+# ───────────────
+# 2. PARAMETERS
+# ───────────────
+Parameters:
+  EnvType:
+    Type: String
+    Default: dev
+    AllowedValues: [ dev, test, prod ]
+    Description: "Select the deployment environment"
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: "Name of an existing EC2 KeyPair"
+  EnableEncryption:
+    Type: String
+    Default: "false"
+    AllowedValues: [ "true", "false" ]
+    Description: "Encrypt S3 bucket when true"
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: "CIDR block for the VPC"
+  SubnetCidr:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: "CIDR block for the public subnet"
+
+# ───────────────
+# 3. MAPPINGS
+# ───────────────
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-0abcdef1234567890
+    us-west-2:
+      AMI: ami-098765fedcba01234
+
+# ───────────────
+# 4. CONDITIONS
+# ───────────────
+Conditions:
+  IsProd:     !Equals [ !Ref EnvType, prod ]
+  IsUSEast1:  !Equals [ !Ref "AWS::Region", us-east-1 ]
+  UseEncrypt: !Equals [ !Ref EnableEncryption, "true" ]
+
+# ───────────────
+# 5. RULES
+# ───────────────
+Rules:
+  SubnetInVpc:
+    Description: "Ensure SubnetCidr sits within VpcCidr"
+    Assertions:
+      - Assert:
+          Fn::Contains:
+            - Fn::Cidr: [ !Ref VpcCidr, 1, 24 ]
+            - !Ref SubnetCidr
+        AssertDescription: "SubnetCidr must be within VpcCidr range"
+
+# ───────────────
+# 6. RESOURCES
+# ───────────────
+Resources:
+
+  # 6.1 VPC
+  DemoVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+    Metadata:
+      Notes: "Primary VPC for demo stack"
+
+  # 6.2 Subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DemoVPC
+      CidrBlock: !Ref SubnetCidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet"
+
+  # 6.3 Internet Gateway + Attachment
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igw"
+
+  AttachIGW:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref DemoVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # 6.4 Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DemoVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-rt"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIGW
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # 6.5 S3 Bucket (conditional encryption)
+  DemoBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-bucket"
+      BucketEncryption:
+        Fn::If:
+          - UseEncrypt
+          - ServerSideEncryptionConfiguration:
+              - ServerSideEncryptionByDefault:
+                  SSEAlgorithm: AES256
+          - !Ref "AWS::NoValue"
+    Metadata:
+      Notes: "Demo bucket; encryption toggled by parameter"
+
+  # 6.6 IAM Role & Instance Profile for EC2
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ ec2.amazonaws.com ]
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+    Metadata:
+      Notes: "Allows EC2 to read from S3 bucket"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [ !Ref EC2Role ]
+      Path: /
+
+  # 6.7 EC2 Instance with cfn-init
+  DemoInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: PublicRoute
+    Metadata:
+      AWS::CloudFormation::Authentication:
+        S3Creds:
+          type: S3
+          roleName: !Ref EC2Role
+          buckets: [ !Ref DemoBucket ]
+      AWS::CloudFormation::Init:
+        configSets:
+          default: [ install, configure, start ]
+        install:
+          packages:
+            yum:
+              httpd: []
+              git: []
+        configure:
+          files:
+            "/var/www/html/index.html":
+              content: !Sub |
+                <h1>Welcome to ${AWS::StackName}</h1>
+                <p>Env: ${EnvType}</p>
+              mode: "000644"
+        start:
+          services:
+            sysvinit:
+              httpd:
+                enabled: true
+                ensureRunning: true
+    Properties:
+      ImageId: !FindInMap [ RegionMap, !Ref "AWS::Region", AMI ]
+      InstanceType: t3.micro
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref PublicSubnet
+          GroupSet: []
+      IamInstanceProfile: !Ref EC2InstanceProfile
+
+# ───────────────
+# 7. OUTPUTS
+# ───────────────
+Outputs:
+  VpcId:
+    Description: "The VPC ID"
+    Value: !Ref DemoVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcId"
+
+  PublicSubnetId:
+    Description: "Public Subnet ID"
+    Value: !Ref PublicSubnet
+    Export:
+      Name: !Sub "${AWS::StackName}-SubnetId"
+
+  BucketName:
+    Description: "Demo S3 bucket name"
+    Value: !Ref DemoBucket
+    Condition: UseEncrypt
+
+  InstanceId:
+    Description: "Demo EC2 Instance ID"
+    Value: !Ref DemoInstance
+
