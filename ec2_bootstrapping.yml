@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  WebServer:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          default: [install, configure, start]
+        install:
+          packages:
+            yum: { httpd: [], git: [] }
+        configure:
+          files:
+            "/var/www/html/index.html":
+              content: |
+                <html><body><h1>Version 1</h1></body></html>
+        start:
+          services:
+            sysvinit:
+              httpd: { enabled: true, ensureRunning: true }
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-0abcdef1234567890
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          yum install -y aws-cfn-bootstrap
+          # Run initial config
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource WebServer --region ${AWS::Region}
+          # Signal back to CFN
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource WebServer --region ${AWS::Region}
+          # Set up cfn-hup for future updates
+          /opt/aws/bin/cfn-hup --install
+          cat << 'EOF' > /etc/cfn/cfn-hup.conf
+          [main]
+          stack=${AWS::StackName}
+          region=${AWS::Region}
+          interval=300
+          EOF
+          cat << 'EOF' > /etc/cfn/hooks.d/update.conf
+          [cfn-init-hook]
+          triggers=post.update
+          path=Resources/WebServer/Metadata/AWS::CloudFormation::Init
+          action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource WebServer --region ${AWS::Region}
+          runas=root
+          EOF
+          service cfn-hup start
+      CreationPolicy:
+        ResourceSignal: { Count: 1, Timeout: PT15M }
+
+
+
+# Place a cfn-hup config file at /etc/cfn/cfn-hup.conf
+# [main]
+# stack=${AWS::StackName}
+# region=${AWS::Region}
+# interval=300         # seconds between polls
+
+# Define hooks in /etc/cfn/hooks.d/ (e.g., updateapp.conf)
+# [cfn-init-hook]
+# triggers=post.update
+# path=Resources/MyServer/Metadata/AWS::CloudFormation::Init
+# action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource MyServer --region ${AWS::Region}
+# runas=root
+
+

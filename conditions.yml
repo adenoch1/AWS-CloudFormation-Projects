@@ -6,7 +6,7 @@ Conditions:
     - !Condition CreateProdResources
     - !Condition UseEncryptedS3
 
-# Only create a bastion host in non‑prod environments
+# Only create a bastion host in prod environments
 Resources:
   BastionHost:
     Type: AWS::EC2::Instance

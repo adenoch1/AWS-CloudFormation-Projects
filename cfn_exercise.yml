@@ -74,7 +74,7 @@ Conditions:
 # 5. Template‑level Metadata
 ##########################
 Metadata:
-  Author: "Your Name"
+  Author: "Enoch"
   Project: "FullExampleStack"
   LastUpdated: "2025‑07‑29"
   AWS::CloudFormation::Interface:
@@ -264,3 +264,22 @@ Outputs:
   WebServerPublicIP:
     Description: "Public IP of the web server"
     Value: !GetAtt WebServer.PublicIp
+
+
+
+# Custom Metadata: You can also roll your own metadata for any purpose
+# Resources:
+#   MyLambda:
+#     Type: AWS::Lambda::Function
+#     Metadata:
+#       Documentation:
+#         Maintainer: "DevOps Team"
+#         LastUpdated: "2025-07-30"
+#         Purpose: "Process incoming S3 events"
+#         Diagram: "https://my-company.com/diagrams/lambda-s3.png"
+
+
+# How to Retrieve Metadata in Stacks
+# Outputs:
+#   MaintainerInfo:
+#     Value: !GetAtt MyLambda.Metadata.Documentation.Maintainer

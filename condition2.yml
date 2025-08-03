@@ -1,0 +1,85 @@
+# check condition1.yml for the imported properties
+AWSTemplateFormatVersion: '2010-09-09'
+Description: |
+  Compute stack: imports VPC and subnet IDs from network-stack, creates a security group and EC2 instance in the imported network.
+
+Parameters:
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3.small
+  AmiId:
+    Description: AMI ID to launch
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AmiId: ami-0abcdef1234567890
+    us-west-2:
+      AmiId: ami-0123456789abcdef0
+
+Rules:
+  ValidInstanceType:
+    RuleCondition: !Contains
+      - - t2.micro
+        - t3.micro
+        - t3.small
+      - !Ref InstanceType
+    Assertions:
+      - Assert: !Contains
+          - - t2.micro
+            - t3.micro
+            - t3.small
+          - !Ref InstanceType
+        AssertDescription: InstanceType must be t2.micro, t3.micro, or t3.small
+
+Conditions:
+  UseImportedAmi: !Not
+    - !Equals
+      - !Ref AmiId
+      - ''
+
+Resources:
+  ComputeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH
+      VpcId: !ImportValue network-stack-vpc-id
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  ComputeInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !If
+        - UseImportedAmi
+        - !Ref AmiId
+        - !FindInMap
+          - RegionMap
+          - !Ref AWS::Region
+          - AmiId
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Select
+            - 0
+            - !Split
+              - ','
+              - !ImportValue network-stack-public-subnet-ids
+          GroupSet:
+            - !Ref ComputeSecurityGroup
+
+Outputs:
+  InstanceId:
+    Description: The EC2 instance ID
+    Value: !Ref ComputeInstance

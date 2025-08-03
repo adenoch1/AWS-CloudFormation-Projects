@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Example template demonstrating Parameters, Mappings, Conditions, Rules,
+  Metadata (Interface, Authentication, Init), UserData, cfn-init, cfn-signal,
+  cfn-hup, CreationPolicy, and Outputs.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: "Instance Configuration" }
+        Parameters: [ KeyName, InstanceType, SSHLocation ]
+    ParameterLabels:
+      KeyName: { default: "SSH Key Pair" }
+      InstanceType: { default: "EC2 Instance Type" }
+      SSHLocation: { default: "SSH access CIDR" }
+
+#-----------------------------------------
+# PARAMETERS
+#-----------------------------------------
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [ dev, prod ]
+    Description: Deployment environment
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair for SSH access
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [ t2.micro, t3.micro, t3.small ]
+    Description: EC2 instance type
+  SSHLocation:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: The CIDR block (in CIDR notation) to allow SSH from
+    AllowedPattern: '(?:[0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}'
+    ConstraintDescription: must be a valid IPv4 CIDR (e.g. 203.0.113.0/24)
+
+#-----------------------------------------
+# MAPPINGS
+#-----------------------------------------
+Mappings:
+  AWSRegion2AMI:
+    us-east-1:
+      AMI: ami-0c02fb55956c7d316   # Amazon Linux 2
+    us-west-2:
+      AMI: ami-08569b978cc4dfa10
+
+#-----------------------------------------
+# CONDITIONS
+#-----------------------------------------
+Conditions:
+  IsProd: !Equals [ !Ref Environment, prod ]
+
+#-----------------------------------------
+# RULES
+#-----------------------------------------
+Rules:
+  ValidateSSHLocationNotEmpty:
+    Description: Ensure SSHLocation isn’t empty
+    RuleCondition: !Not [ !Equals [ !Ref Environment, "" ] ]
+    Assertions:
+      - Assert: !Not [ !Equals [ !Ref SSHLocation, "" ] ]
+        AssertDescription: SSHLocation must be a non-empty CIDR
+
+#-----------------------------------------
+# RESOURCES
+#-----------------------------------------
+Resources:
+
+  # VPC + subnets (for demonstration)
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-subnet"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  AttachIGW:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIGW
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group allowing SSH
+  WebSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH and HTTP access
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+         # SSH
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+
+         # HTTP
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+
+  # EC2 Instance with full Metadata & Init
+  WebServerInstance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Authentication:
+        S3Creds:
+          type: S3
+          buckets: [ !Sub "${AWS::StackName}-assets" ]
+          roleName: !GetAtt CFNRole.Arn
+
+      AWS::CloudFormation::Init:
+        configSets:
+          default: [ install, configure, setupHup ]
+        install:
+          packages:
+            yum:
+              httpd: []
+              git: []
+        configure:
+          files:
+            /var/www/html/index.html:
+              content: |
+                <html><body><h1>Hello from CFN Init!</h1></body></html>
+          services:
+            sysvinit:
+              httpd:
+                enabled: true
+                ensureRunning: true
+        setupHup:
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack=${AWS::StackName}
+                region=${AWS::Region}
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.WebServerInstance.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource WebServerInstance --region ${AWS::Region}
+                runas=root
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: true
+                ensureRunning: true
+
+    Properties:
+      ImageId: !FindInMap [ AWSRegion2AMI, !Ref "AWS::Region", AMI ]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          GroupSet: [ !Ref WebSG ]
+          SubnetId: !Ref PublicSubnet
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          yum install -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource WebServerInstance --region ${AWS::Region}
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource WebServerInstance --region ${AWS::Region}
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+
+  CFNRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [ ec2.amazonaws.com ] }
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+
+#-----------------------------------------
+# OUTPUTS
+#-----------------------------------------
+Outputs:
+  InstanceId:
+    Description: The ID of the web server instance
+    Value: !Ref WebServerInstance
+  PublicIP:
+    Description: Public IP of the web server
+    Value: !GetAtt WebServerInstance.PublicIp
+  WebURL:
+    Description: URL of the sample page
+    Value: !Sub "http://${WebServerInstance.PublicIp}/"
